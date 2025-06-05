@@ -3,30 +3,27 @@
 import fetch from "node-fetch";
 
 export default async function handler(req, res) {
-  // 1) Grab the one catch-all segment (still percent-encoded once):
-  //    e.g. req.query.path = ["https%3A%2F%2Fhttpbin.org%2Fget"]
+  // 1) Grab the “catch‐all” path segments:
+  //    e.g. if client calls …
+  //      /api/https%3A%2F%2Fhttpbin.org%2Fget
+  //    Then `req.query.path = ["https://httpbin.org/get"]`.
   const pathParts = req.query.path || [];
-  const raw       = pathParts.join("/"); 
-  //            raw === "https%3A%2F%2Fhttpbin.org%2Fget"
-
-  // 2) Decode exactly once:
-  const targetUrl = decodeURIComponent(raw);
+  const targetUrl = pathParts.join("/"); 
   //            targetUrl === "https://httpbin.org/get"
 
-  console.log("→ raw segment:", raw);
-  console.log("→ decoded URL:", targetUrl);
+  console.log("→ targetUrl (after Vercel’s auto‐decode):", targetUrl);
 
-  // 3) Reject anything that does not start with "http"
+  // 2) Reject anything not starting with "http"
   if (!targetUrl.startsWith("http")) {
     return res.status(400).json({ error: "Invalid target URL" });
   }
 
   try {
-    // 4) Forward the request to the real target URL
+    // 3) Forward the incoming request to the real target URL
     const upstreamRes = await fetch(targetUrl, {
       method: req.method,
       headers: {
-        // Copy all incoming headers except Host, Origin, Referer, Cookie
+        // copy all headers except Host, Origin, Referer, Cookie
         ...Object.fromEntries(
           Object.entries(req.headers).filter(([key]) => {
             const lower = key.toLowerCase();
@@ -34,11 +31,11 @@ export default async function handler(req, res) {
           })
         ),
       },
-      // Only GET and HEAD omit the body; other methods forward the raw body
+      // GET/HEAD omit the body; others forward req.body
       body: ["GET", "HEAD"].includes(req.method) ? undefined : req.body,
     });
 
-    // 5) Copy upstream response headers (except existing CORS headers)
+    // 4) Copy almost‐all upstream headers into our response
     upstreamRes.headers.forEach((value, name) => {
       if (
         ![
@@ -50,7 +47,7 @@ export default async function handler(req, res) {
       }
     });
 
-    // 6) Add permissive CORS headers ourselves
+    // 5) Always add permissive CORS headers
     res.setHeader("Access-Control-Allow-Origin", "*");
     res.setHeader(
       "Access-Control-Allow-Methods",
@@ -61,12 +58,12 @@ export default async function handler(req, res) {
       "Content-Type, Authorization, X-Requested-With, Accept"
     );
 
-    // 7) If it’s a preflight OPTIONS, return immediately
+    // 6) If it’s a preflight OPTIONS, end immediately
     if (req.method === "OPTIONS") {
       return res.status(204).end();
     }
 
-    // 8) Stream the upstream response body back to the client
+    // 7) Pipe the upstream response body back to the browser
     const buffer = await upstreamRes.arrayBuffer();
     return res.status(upstreamRes.status).send(Buffer.from(buffer));
   } catch (e) {
